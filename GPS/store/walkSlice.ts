@@ -1,4 +1,3 @@
-// store/walkSlice.ts - ADICIONAR MODO
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 
 export interface WalkPoint {
