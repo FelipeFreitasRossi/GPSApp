@@ -1,9 +1,8 @@
-// app/index.tsx - VERSÃO REORGANIZADA E OTIMIZADA
-import { addWalk } from "../store/walkSlice";
+import { addWalk } from "@/store/walkSlice";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import haversine from "haversine";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   StyleSheet,
   Text,
@@ -12,11 +11,11 @@ import {
   TouchableOpacity,
   Animated,
   Platform,
-  Modal,
   ScrollView,
   Dimensions,
   Switch,
   PanResponder,
+  Alert,
 } from "react-native";
 import "react-native-get-random-values";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
@@ -26,82 +25,21 @@ import {
 } from "react-native-safe-area-context";
 import { useDispatch, useSelector } from "react-redux";
 import { v4 as uuid } from "uuid";
-import { RootState } from "../store";
-import { MaterialIcons, FontAwesome5, Ionicons, Feather } from "@expo/vector-icons";
+import { RootState } from "@/store";
+import { MaterialIcons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+
+// Importe as constantes e tipos
+import { MAP_CONFIGS, WALK_MODES, darkMapStyle, lightMapStyle } from "@/constants/walk";
+import { SAMPLE_POIS, EXPLORATION_AREAS } from "@/constants/exploration";
+import { FITNESS_GOALS, WORKOUT_PLANS, ACHIEVEMENTS } from "@/constants/fitness";
+import { MapType, WalkMode, AppWalkPoint, Poi, ExplorationArea, FitnessGoal, WorkoutPlan } from "@/types/map";
 
 const { width, height } = Dimensions.get('window');
 
-interface WalkPoint {
-  coords: Location.LocationObjectCoords;
-  timestamp: number;
-  speed?: number;
-  altitude?: number;
-}
-
-type MapType = 'standard' | 'satellite' | 'hybrid';
-type WalkMode = 'navigation' | 'exploration' | 'fitness';
-
-interface MapConfig {
-  name: string;
-  icon: string;
-  description: string;
-  color: string;
-  features: string[];
-  bestFor: string[];
-}
-
-const MAP_CONFIGS: Record<MapType, MapConfig> = {
-  standard: {
-    name: 'Padrão',
-    icon: 'map',
-    description: 'Mapa tradicional com ruas detalhadas',
-    color: '#4285F4',
-    features: ['Rotas detalhadas', 'Nomes de ruas', 'Tráfego em tempo real'],
-    bestFor: ['Navegação urbana', 'Encontrar endereços', 'Planejar rotas']
-  },
-  satellite: {
-    name: 'Satélite',
-    icon: 'satellite',
-    description: 'Imagens reais de satélite em alta resolução',
-    color: '#34A853',
-    features: ['Imagens aéreas', 'Detalhes do terreno', 'Pontos de referência'],
-    bestFor: ['Explorar áreas naturais', 'Identificar locais', 'Ver edificações']
-  },
-  hybrid: {
-    name: 'Híbrido',
-    icon: 'layers',
-    description: 'Combina imagens de satélite com informações de ruas',
-    color: '#FBBC05',
-    features: ['Visual realista', 'Ruas sobrepostas', 'Melhor contexto'],
-    bestFor: ['Novas áreas', 'Contexto visual', 'Orientação espacial']
-  }
-};
-
-const WALK_MODES = {
-  navigation: {
-    name: 'Navegação',
-    icon: 'navigation',
-    color: '#2196F3',
-    description: 'Rastreie rotas e distâncias'
-  },
-  exploration: {
-    name: 'Exploração',
-    icon: 'explore',
-    color: '#4CAF50',
-    description: 'Descubra novos lugares'
-  },
-  fitness: {
-    name: 'Fitness',
-    icon: 'directions-run',
-    color: '#FF5722',
-    description: 'Acompanhe exercícios'
-  }
-};
-
 export default function WalkApp() {
   const [location, setLocation] = useState<Location.LocationObjectCoords | null>(null);
-  const [route, setRoute] = useState<WalkPoint[]>([]);
+  const [route, setRoute] = useState<AppWalkPoint[]>([]);
   const [isWalking, setIsWalking] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [distance, setDistance] = useState(0);
@@ -122,9 +60,31 @@ export default function WalkApp() {
   const [showPOI, setShowPOI] = useState(true);
   const [isMapDragging, setIsMapDragging] = useState(false);
   
-  const watchId = useRef<Location.LocationSubscription>(null);
+  // Estados para modo Exploração
+  const [pois, setPois] = useState<Poi[]>(SAMPLE_POIS);
+  const [explorationAreas, setExplorationAreas] = useState<ExplorationArea[]>(EXPLORATION_AREAS);
+  const [discoveredPois, setDiscoveredPois] = useState<string[]>([]);
+  const [showPoiDetails, setShowPoiDetails] = useState<string | null>(null);
+  const [showAreaDetails, setShowAreaDetails] = useState<string | null>(null);
+  
+  // Estados para modo Fitness
+  const [fitnessGoals, setFitnessGoals] = useState<FitnessGoal[]>(FITNESS_GOALS);
+  const [workoutPlans, setWorkoutPlans] = useState<WorkoutPlan[]>(WORKOUT_PLANS);
+  const [achievements, setAchievements] = useState(ACHIEVEMENTS);
+  const [selectedPlan, setSelectedPlan] = useState<WorkoutPlan | null>(null);
+  const [activeWorkout, setActiveWorkout] = useState<WorkoutPlan | null>(null);
+  const [currentInterval, setCurrentInterval] = useState<number>(0);
+  const [intervalTimeLeft, setIntervalTimeLeft] = useState<number>(0);
+  const [workoutProgress, setWorkoutProgress] = useState<number>(0);
+  const [showFitnessGoals, setShowFitnessGoals] = useState(false);
+  const [showWorkoutPlans, setShowWorkoutPlans] = useState(false);
+  const [showAchievements, setShowAchievements] = useState(false);
+  
+  const watchId = useRef<Location.LocationSubscription | null>(null);
   const mapRef = useRef<MapView>(null);
-  const timerRef = useRef<NodeJS.Timeout>();
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const workoutTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const intervalTimerRef = useRef<NodeJS.Timeout | null>(null);
   const startTimeRef = useRef<number>(0);
   const distanceRef = useRef<number>(0);
   const caloriesRef = useRef<number>(0);
@@ -155,9 +115,11 @@ export default function WalkApp() {
 
   useEffect(() => {
     initLocation();
-    startCompass();
+    const compassInterval = startCompass();
     return () => {
       cleanup();
+      cleanupWorkoutTimers();
+      if (compassInterval) clearInterval(compassInterval);
     };
   }, []);
 
@@ -187,6 +149,23 @@ export default function WalkApp() {
       useNativeDriver: true,
     }).start();
   }, []);
+
+  // Verificar POIs próximos no modo Exploração
+  useEffect(() => {
+    if (location && walkMode === 'exploration' && !isWalking) {
+      checkNearbyPois();
+      checkExplorationAreas();
+    }
+  }, [location, walkMode]);
+
+  // Atualizar metas de fitness durante a caminhada
+  useEffect(() => {
+    if (walkMode === 'fitness' && isWalking) {
+      updateFitnessGoals();
+      checkWorkoutProgress();
+      checkAchievements();
+    }
+  }, [distance, duration, calories, walkMode, isWalking]);
 
   const initLocation = async () => {
     try {
@@ -227,14 +206,324 @@ export default function WalkApp() {
   };
 
   const startCompass = () => {
-    if (Location.hasServicesEnabledAsync()) {
-      // Simulação simplificada de bússola
-      setInterval(() => {
-        setCompassHeading(prev => (prev + 0.5) % 360);
-      }, 100);
+    // Simulação simplificada de bússola
+    return setInterval(() => {
+      setCompassHeading(prev => (prev + 0.5) % 360);
+    }, 100);
+  };
+
+  // --- FUNÇÕES PARA MODO EXPLORAÇÃO ---
+  const checkNearbyPois = () => {
+    if (!location) return;
+
+    const updatedPois = pois.map(poi => {
+      const distance = haversine(
+        { latitude: location.latitude, longitude: location.longitude },
+        poi.coords,
+        { unit: 'meter' }
+      );
+      
+      // Atualiza distância
+      const updatedPoi = { ...poi, distance };
+      
+      // Verifica se o POI está próximo o suficiente para ser descoberto
+      if (distance < 50 && !discoveredPois.includes(poi.id)) {
+        if (!isWalking) {
+          discoverPoi(poi.id);
+        }
+      }
+      
+      return updatedPoi;
+    });
+    
+    setPois(updatedPois);
+  };
+
+  const checkExplorationAreas = () => {
+    if (!location) return;
+
+    const updatedAreas = explorationAreas.map(area => {
+      const distance = haversine(
+        { latitude: location.latitude, longitude: location.longitude },
+        area.coords,
+        { unit: 'meter' }
+      );
+      
+      // Se estiver dentro da área, verifica POIs
+      if (distance <= area.radius) {
+        const areaPois = pois.filter(poi => {
+          const poiDistance = haversine(area.coords, poi.coords, { unit: 'meter' });
+          return poiDistance <= area.radius;
+        });
+        
+        const discoveredInArea = areaPois.filter(poi => discoveredPois.includes(poi.id));
+        
+        return {
+          ...area,
+          pointsDiscovered: discoveredInArea.length,
+          totalPoints: areaPois.length,
+        };
+      }
+      
+      return area;
+    });
+    
+    setExplorationAreas(updatedAreas);
+  };
+
+  const discoverPoi = (poiId: string) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    
+    setDiscoveredPois(prev => {
+      if (!prev.includes(poiId)) {
+        return [...prev, poiId];
+      }
+      return prev;
+    });
+    
+    // Atualiza o POI como visitado
+    setPois(prev => prev.map(poi => 
+      poi.id === poiId ? { ...poi, visited: true } : poi
+    ));
+    
+    // Mostra modal de descoberta
+    const discoveredPoi = pois.find(p => p.id === poiId);
+    if (discoveredPoi) {
+      Alert.alert(
+        '🎉 Ponto Descoberto!',
+        `Você encontrou: ${discoveredPoi.name}\n${discoveredPoi.description || ''}`,
+        [{ text: 'OK' }]
+      );
     }
   };
 
+  const navigateToPoi = (poiId: string) => {
+    const poi = pois.find(p => p.id === poiId);
+    if (poi && mapRef.current) {
+      mapRef.current.animateCamera({
+        center: poi.coords,
+        zoom: 18,
+      });
+      setShowPoiDetails(poiId);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+  };
+
+  const startExplorationWalk = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    
+    // Inicia a caminhada de exploração
+    setRoute([]);
+    setDistance(0);
+    setDuration(0);
+    setDiscoveredPois([]);
+    
+    Alert.alert(
+      '🚶‍♂️ Iniciando Exploração',
+      'Explore a área para descobrir pontos de interesse! Você será notificado quando estiver próximo a um local interessante.',
+      [{ text: 'Vamos lá!', onPress: startWalk }]
+    );
+  };
+
+  // --- FUNÇÕES PARA MODO FITNESS ---
+  const updateFitnessGoals = () => {
+    const updatedGoals = fitnessGoals.map(goal => {
+      let current = 0;
+      
+      switch (goal.type) {
+        case 'distance':
+          current = distance;
+          break;
+        case 'time':
+          current = duration;
+          break;
+        case 'calories':
+          current = calories;
+          break;
+        case 'steps':
+          // Estimativa de passos (aproximadamente 1.4 passos por metro)
+          current = Math.floor(distance * 1.4);
+          break;
+      }
+      
+      const achieved = current >= goal.target;
+      
+      if (achieved && !goal.achieved) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        Alert.alert('🎯 Meta Atingida!', `Você alcançou sua meta de ${goal.type}!`);
+      }
+      
+      return { ...goal, current, achieved };
+    });
+    
+    setFitnessGoals(updatedGoals);
+  };
+
+  const checkAchievements = () => {
+    const updatedAchievements = achievements.map(achievement => {
+      let achieved = achievement.achieved;
+      
+      switch (achievement.id) {
+        case 'first_walk':
+          if (history.length > 0) achieved = true;
+          break;
+        case '5k':
+          if (distance >= 5000) achieved = true;
+          break;
+        case 'marathon':
+          const totalDistance = history.reduce((sum, walk) => sum + walk.distance, 0);
+          if (totalDistance >= 42000) achieved = true;
+          break;
+        case 'early_bird':
+          const now = new Date();
+          if (now.getHours() < 6) achieved = true;
+          break;
+        case 'weekend_warrior':
+          const weekendWalks = history.filter(walk => {
+            const date = new Date(walk.date);
+            return date.getDay() === 0 || date.getDay() === 6;
+          });
+          if (weekendWalks.length >= 5) achieved = true;
+          break;
+      }
+      
+      if (achieved && !achievement.achieved) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+      
+      return { ...achievement, achieved };
+    });
+    
+    setAchievements(updatedAchievements);
+  };
+
+  const selectWorkoutPlan = (plan: WorkoutPlan) => {
+    setSelectedPlan(plan);
+    setShowWorkoutPlans(false);
+    
+    Alert.alert(
+      `💪 ${plan.name}`,
+      `Duração: ${plan.duration} minutos\n${plan.distance ? `Distância: ${(plan.distance / 1000).toFixed(1)} km` : 'Treino intervalado'}`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Iniciar Treino', onPress: () => startWorkout(plan) },
+      ]
+    );
+  };
+
+  const startWorkout = (plan: WorkoutPlan) => {
+    setActiveWorkout(plan);
+    setCurrentInterval(0);
+    setWorkoutProgress(0);
+    
+    if (plan.type === 'interval' && plan.intervals) {
+      setIntervalTimeLeft(plan.intervals[0].duration);
+    }
+    
+    // Inicia a caminhada
+    startWalk();
+    
+    // Se for treino intervalado, inicia o timer de intervalos
+    if (plan.type === 'interval' && plan.intervals) {
+      startIntervalTimer(plan);
+    }
+  };
+
+  const startIntervalTimer = (plan: WorkoutPlan) => {
+    if (!plan.intervals) return;
+    
+    intervalTimerRef.current = setInterval(() => {
+      setIntervalTimeLeft(prev => {
+        if (prev <= 1) {
+          // Troca de intervalo
+          const nextInterval = currentInterval + 1;
+          
+          if (nextInterval < plan.intervals!.length) {
+            setCurrentInterval(nextInterval);
+            
+            // Feedback háptico para mudança de intervalo
+            Haptics.impactAsync(
+              plan.intervals![nextInterval].type === 'work' 
+                ? Haptics.ImpactFeedbackStyle.Heavy
+                : Haptics.ImpactFeedbackStyle.Light
+            );
+            
+            return plan.intervals![nextInterval].duration;
+          } else {
+            // Treino completo
+            completeWorkout();
+            return 0;
+          }
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const checkWorkoutProgress = () => {
+    if (!activeWorkout) return;
+    
+    let progress = 0;
+    
+    if (activeWorkout.distance) {
+      progress = (distance / activeWorkout.distance) * 100;
+    } else if (activeWorkout.duration) {
+      progress = (duration / (activeWorkout.duration * 60)) * 100;
+    }
+    
+    setWorkoutProgress(Math.min(100, progress));
+    
+    // Verifica se completou o treino
+    if (progress >= 100 && !activeWorkout.completed) {
+      completeWorkout();
+    }
+  };
+
+  const completeWorkout = () => {
+    if (!activeWorkout) return;
+    
+    // Limpa timers
+    if (intervalTimerRef.current) {
+      clearInterval(intervalTimerRef.current);
+      intervalTimerRef.current = null;
+    }
+    if (workoutTimerRef.current) {
+      clearInterval(workoutTimerRef.current);
+      workoutTimerRef.current = null;
+    }
+    
+    // Atualiza plano como completado
+    setWorkoutPlans(prev => prev.map(plan => 
+      plan.id === activeWorkout.id ? { ...plan, completed: true } : plan
+    ));
+    
+    // Para a caminhada
+    stopWalk();
+    
+    // Feedback
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    
+    Alert.alert(
+      '🏆 Treino Completo!',
+      `Parabéns! Você completou: ${activeWorkout.name}\nDistância: ${(distance / 1000).toFixed(2)} km\nTempo: ${formatTime(duration)}\nCalorias: ${Math.round(calories)} cal`,
+      [{ text: 'OK' }]
+    );
+    
+    setActiveWorkout(null);
+  };
+
+  const cleanupWorkoutTimers = () => {
+    if (intervalTimerRef.current) {
+      clearInterval(intervalTimerRef.current);
+      intervalTimerRef.current = null;
+    }
+    if (workoutTimerRef.current) {
+      clearInterval(workoutTimerRef.current);
+      workoutTimerRef.current = null;
+    }
+  };
+
+  // --- FUNÇÕES PRINCIPAIS DE CAMINHADA ---
   const startWalk = async () => {
     try {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -253,6 +542,7 @@ export default function WalkApp() {
       
       if (watchId.current) {
         watchId.current.remove();
+        watchId.current = null;
       }
 
       // Animação de pulsação
@@ -299,7 +589,7 @@ export default function WalkApp() {
   const handleLocationUpdate = (newLocation: Location.LocationObject) => {
     if (!isWalking || isPaused) return;
 
-    const newPoint: WalkPoint = {
+    const newPoint: AppWalkPoint = {
       coords: newLocation.coords,
       timestamp: Date.now(),
       speed: newLocation.coords.speed || 0,
@@ -322,8 +612,14 @@ export default function WalkApp() {
       if (prevRoute.length > 0) {
         const lastPoint = prevRoute[prevRoute.length - 1];
         const segmentDistance = haversine(
-          lastPoint.coords,
-          newLocation.coords,
+          {
+            latitude: lastPoint.coords.latitude,
+            longitude: lastPoint.coords.longitude
+          },
+          {
+            latitude: newLocation.coords.latitude,
+            longitude: newLocation.coords.longitude
+          },
           { unit: 'meter' }
         );
         
@@ -354,15 +650,19 @@ export default function WalkApp() {
 
   const pauseWalk = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setIsPaused(!isPaused);
+    const newPausedState = !isPaused;
+    setIsPaused(newPausedState);
     
-    if (isPaused) {
+    if (!newPausedState) {
+      // Se estava pausado e agora vai continuar
       timerRef.current = setInterval(() => {
         setDuration(prev => prev + 1);
       }, 1000);
     } else {
+      // Se vai pausar
       if (timerRef.current) {
         clearInterval(timerRef.current);
+        timerRef.current = null;
       }
     }
   };
@@ -376,10 +676,12 @@ export default function WalkApp() {
     
     if (timerRef.current) {
       clearInterval(timerRef.current);
+      timerRef.current = null;
     }
     
     if (watchId.current) {
       watchId.current.remove();
+      watchId.current = null;
     }
     
     if (route.length > 2 && distance > 10) {
@@ -397,7 +699,7 @@ export default function WalkApp() {
         avgSpeed,
         maxSpeed,
         calories: Math.round(calories),
-        mode: 'walking',
+        mode: 'walking' as const,
         points: route.length,
         accuracy: accuracy || 0,
       };
@@ -410,9 +712,11 @@ export default function WalkApp() {
   const cleanup = () => {
     if (watchId.current) {
       watchId.current.remove();
+      watchId.current = null;
     }
     if (timerRef.current) {
       clearInterval(timerRef.current);
+      timerRef.current = null;
     }
   };
 
@@ -518,6 +822,60 @@ export default function WalkApp() {
                   </Animated.View>
                 </Marker>
               )}
+            </>
+          )}
+
+          {/* Marcadores de POIs no Mapa (para modo Exploração) */}
+          {walkMode === 'exploration' && !isWalking && (
+            <>
+              {pois.map(poi => (
+                <Marker
+                  key={poi.id}
+                  coordinate={poi.coords}
+                  onPress={() => navigateToPoi(poi.id)}
+                >
+                  <Animated.View style={[
+                    styles.poiMarker,
+                    poi.visited && styles.poiMarkerVisited,
+                    { 
+                      backgroundColor: poi.visited ? '#4CAF50' : currentMode.color,
+                      transform: [{ scale: pulseAnim }] 
+                    }
+                  ]}>
+                    <MaterialIcons 
+                      name={
+                        poi.category === 'viewpoint' ? 'visibility' :
+                        poi.category === 'natural' ? 'park' :
+                        poi.category === 'historic' ? 'history' :
+                        poi.category === 'restaurant' ? 'restaurant' :
+                        'place'
+                      } 
+                      size={16} 
+                      color="white" 
+                    />
+                    {poi.visited && (
+                      <View style={styles.visitedBadge}>
+                        <MaterialIcons name="check" size={10} color="white" />
+                      </View>
+                    )}
+                  </Animated.View>
+                </Marker>
+              ))}
+              
+              {/* Áreas de exploração (círculos no mapa) */}
+              {explorationAreas.map(area => (
+                <Marker
+                  key={area.id}
+                  coordinate={area.coords}
+                  onPress={() => setShowAreaDetails(area.id)}
+                >
+                  <View style={styles.areaMarker}>
+                    <Text style={styles.areaMarkerText}>
+                      {area.pointsDiscovered}/{area.totalPoints}
+                    </Text>
+                  </View>
+                </Marker>
+              ))}
             </>
           )}
         </MapView>
@@ -713,15 +1071,32 @@ export default function WalkApp() {
                 <TouchableOpacity 
                   style={[styles.exploreButton, { backgroundColor: currentMode.color }]}
                   onPress={() => {
-                    // Ação para modo exploração/fitness
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    if (walkMode === 'exploration') {
+                      startExplorationWalk();
+                    } else if (walkMode === 'fitness') {
+                      setShowWorkoutPlans(true);
+                    }
                   }}
                 >
-                  <MaterialIcons name="explore" size={20} color="white" />
+                  <MaterialIcons 
+                    name={walkMode === 'exploration' ? "explore" : "fitness-center"} 
+                    size={20} 
+                    color="white" 
+                  />
                   <Text style={styles.exploreButtonText}>
-                    {walkMode === 'exploration' ? 'EXPLORAR' : 'FITNESS'}
+                    {walkMode === 'exploration' ? 'EXPLORAR' : 'TREINOS'}
                   </Text>
                 </TouchableOpacity>
+                
+                {/* Botão adicional para modo fitness */}
+                {walkMode === 'fitness' && (
+                  <TouchableOpacity 
+                    style={[styles.fitnessGoalButton, { backgroundColor: `${currentMode.color}80` }]}
+                    onPress={() => setShowFitnessGoals(true)}
+                  >
+                    <MaterialIcons name="track-changes" size={16} color="white" />
+                  </TouchableOpacity>
+                )}
               </View>
             )}
           </View>
@@ -790,89 +1165,335 @@ export default function WalkApp() {
       </Animated.View>
 
       {/* MODAL SELETOR DE MAPA */}
-      <Animated.View 
-        style={[
-          styles.mapSelectorModal,
-          { transform: [{ translateY: mapSelectorAnim }] }
-        ]}
-      >
-        <View style={styles.modalHeader}>
-          <Text style={styles.modalTitle}>Tipo de Mapa</Text>
-          <TouchableOpacity onPress={() => setShowMapSelector(false)}>
-            <MaterialIcons name="close" size={24} color="#666" />
-          </TouchableOpacity>
-        </View>
-        
-        <ScrollView style={styles.mapOptionsContainer}>
-          {Object.entries(MAP_CONFIGS).map(([key, config]) => (
-            <TouchableOpacity 
-              key={key}
-              style={[
-                styles.mapOption,
-                mapType === key && { borderColor: config.color, backgroundColor: `${config.color}10` }
-              ]}
-              onPress={() => changeMapType(key as MapType)}
-            >
-              <View style={[styles.mapOptionIcon, { backgroundColor: config.color }]}>
-                <MaterialIcons name={config.icon} size={22} color="white" />
-              </View>
-              <View style={styles.mapOptionContent}>
-                <Text style={styles.mapOptionTitle}>{config.name}</Text>
-                <Text style={styles.mapOptionDesc}>{config.description}</Text>
-                <View style={styles.mapOptionFeatures}>
-                  {config.bestFor.slice(0, 2).map((feature, index) => (
-                    <View key={index} style={styles.featureTag}>
-                      <Text style={styles.featureText}>{feature}</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-              {mapType === key && (
-                <MaterialIcons name="check-circle" size={22} color={config.color} />
-              )}
+      {showMapSelector && (
+        <Animated.View 
+          style={[
+            styles.mapSelectorModal,
+            { transform: [{ translateY: mapSelectorAnim }] }
+          ]}
+        >
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Tipo de Mapa</Text>
+            <TouchableOpacity onPress={() => setShowMapSelector(false)}>
+              <MaterialIcons name="close" size={24} color="#666" />
             </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </Animated.View>
+          </View>
+          
+          <ScrollView style={styles.mapOptionsContainer}>
+            {Object.entries(MAP_CONFIGS).map(([key, config]) => (
+              <TouchableOpacity 
+                key={key}
+                style={[
+                  styles.mapOption,
+                  mapType === key && { borderColor: config.color, backgroundColor: `${config.color}10` }
+                ]}
+                onPress={() => changeMapType(key as MapType)}
+              >
+                <View style={[styles.mapOptionIcon, { backgroundColor: config.color }]}>
+                  <MaterialIcons name={config.icon} size={22} color="white" />
+                </View>
+                <View style={styles.mapOptionContent}>
+                  <Text style={styles.mapOptionTitle}>{config.name}</Text>
+                  <Text style={styles.mapOptionDesc}>{config.description}</Text>
+                  <View style={styles.mapOptionFeatures}>
+                    {config.bestFor.slice(0, 2).map((feature, index) => (
+                      <View key={index} style={styles.featureTag}>
+                        <Text style={styles.featureText}>{feature}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+                {mapType === key && (
+                  <MaterialIcons name="check-circle" size={22} color={config.color} />
+                )}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </Animated.View>
+      )}
 
       {/* MODAL SELETOR DE MODO */}
-      <Animated.View 
-        style={[
-          styles.modeSelectorModal,
-          { transform: [{ translateY: modeSelectorAnim }] }
-        ]}
-      >
-        <View style={styles.modalHeader}>
-          <Text style={styles.modalTitle}>Modo de Uso</Text>
-          <TouchableOpacity onPress={() => setShowModeSelector(false)}>
-            <MaterialIcons name="close" size={24} color="#666" />
+      {showModeSelector && (
+        <Animated.View 
+          style={[
+            styles.modeSelectorModal,
+            { transform: [{ translateY: modeSelectorAnim }] }
+          ]}
+        >
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Modo de Uso</Text>
+            <TouchableOpacity onPress={() => setShowModeSelector(false)}>
+              <MaterialIcons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.modeOptionsContainer}>
+            {Object.entries(WALK_MODES).map(([key, mode]) => (
+              <TouchableOpacity 
+                key={key}
+                style={[
+                  styles.modeOption,
+                  walkMode === key && { borderColor: mode.color, backgroundColor: `${mode.color}10` }
+                ]}
+                onPress={() => changeWalkMode(key as WalkMode)}
+              >
+                <View style={[styles.modeIcon, { backgroundColor: mode.color }]}>
+                  <MaterialIcons name={mode.icon} size={22} color="white" />
+                </View>
+                <View style={styles.modeContent}>
+                  <Text style={styles.modeName}>{mode.name}</Text>
+                  <Text style={styles.modeDesc}>{mode.description}</Text>
+                </View>
+                {walkMode === key && (
+                  <MaterialIcons name="check-circle" size={22} color={mode.color} />
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </Animated.View>
+      )}
+
+      {/* Modal de Detalhes do POI */}
+      {showPoiDetails && (
+        <Animated.View style={[styles.poiModal, { bottom: 0 }]}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Ponto de Interesse</Text>
+            <TouchableOpacity onPress={() => setShowPoiDetails(null)}>
+              <MaterialIcons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+          
+          {(() => {
+            const poi = pois.find(p => p.id === showPoiDetails);
+            if (!poi) return null;
+            
+            return (
+              <View style={styles.poiContent}>
+                <View style={styles.poiHeader}>
+                  <View style={[styles.poiCategory, { backgroundColor: currentMode.color }]}>
+                    <MaterialIcons 
+                      name={
+                        poi.category === 'viewpoint' ? 'visibility' :
+                        poi.category === 'natural' ? 'park' :
+                        poi.category === 'historic' ? 'history' :
+                        poi.category === 'restaurant' ? 'restaurant' :
+                        'place'
+                      } 
+                      size={20} 
+                      color="white" 
+                    />
+                  </View>
+                  <View style={styles.poiInfo}>
+                    <Text style={styles.poiName}>{poi.name}</Text>
+                    <Text style={styles.poiDistance}>{poi.distance.toFixed(0)}m de distância</Text>
+                  </View>
+                  {poi.rating && (
+                    <View style={styles.poiRating}>
+                      <MaterialIcons name="star" size={16} color="#FFD700" />
+                      <Text style={styles.ratingText}>{poi.rating.toFixed(1)}</Text>
+                    </View>
+                  )}
+                </View>
+                
+                {poi.description && (
+                  <Text style={styles.poiDescription}>{poi.description}</Text>
+                )}
+                
+                <View style={styles.poiActions}>
+                  <TouchableOpacity 
+                    style={styles.poiActionButton}
+                    onPress={() => {
+                      // Navegação para o POI
+                      if (mapRef.current) {
+                        mapRef.current.animateCamera({
+                          center: poi.coords,
+                          zoom: 18,
+                        });
+                      }
+                    }}
+                  >
+                    <MaterialIcons name="navigation" size={18} color={currentMode.color} />
+                    <Text style={[styles.poiActionText, { color: currentMode.color }]}>Navegar</Text>
+                  </TouchableOpacity>
+                  
+                  {!poi.visited && (
+                    <TouchableOpacity 
+                      style={[styles.poiActionButton, styles.discoverButton]}
+                      onPress={() => discoverPoi(poi.id)}
+                    >
+                      <MaterialIcons name="explore" size={18} color="white" />
+                      <Text style={[styles.poiActionText, { color: 'white' }]}>Descobrir</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            );
+          })()}
+        </Animated.View>
+      )}
+
+      {/* Modal de Metas de Fitness */}
+      {showFitnessGoals && (
+        <Animated.View style={[styles.goalsModal, { transform: [{ translateY: modeSelectorAnim }] }]}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Metas de Fitness</Text>
+            <TouchableOpacity onPress={() => setShowFitnessGoals(false)}>
+              <MaterialIcons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView style={styles.goalsContainer}>
+            {fitnessGoals.map((goal, index) => (
+              <View key={index} style={styles.goalItem}>
+                <View style={styles.goalIcon}>
+                  <MaterialIcons 
+                    name={
+                      goal.type === 'distance' ? 'directions-walk' :
+                      goal.type === 'time' ? 'timer' :
+                      goal.type === 'calories' ? 'local-fire-department' :
+                      'footprint'
+                    } 
+                    size={20} 
+                    color={goal.achieved ? '#4CAF50' : '#666'} 
+                  />
+                </View>
+                <View style={styles.goalContent}>
+                  <Text style={styles.goalName}>
+                    {goal.type === 'distance' ? 'Distância' :
+                     goal.type === 'time' ? 'Tempo' :
+                     goal.type === 'calories' ? 'Calorias' : 'Passos'}
+                  </Text>
+                  <View style={styles.goalProgress}>
+                    <View 
+                      style={[
+                        styles.goalProgressBar,
+                        { 
+                          width: `${Math.min(100, (goal.current / goal.target) * 100)}%`,
+                          backgroundColor: goal.achieved ? '#4CAF50' : currentMode.color
+                        }
+                      ]} 
+                    />
+                  </View>
+                  <Text style={styles.goalText}>
+                    {goal.current.toFixed(0)} / {goal.target} {goal.unit}
+                    {goal.achieved && ' ✅'}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+        </Animated.View>
+      )}
+
+      {/* Modal de Planos de Treino */}
+      {showWorkoutPlans && (
+        <Animated.View style={[styles.workoutModal, { transform: [{ translateY: modeSelectorAnim }] }]}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Planos de Treino</Text>
+            <TouchableOpacity onPress={() => setShowWorkoutPlans(false)}>
+              <MaterialIcons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView style={styles.workoutContainer}>
+            {workoutPlans.map((plan) => (
+              <TouchableOpacity 
+                key={plan.id}
+                style={[
+                  styles.workoutItem,
+                  plan.completed && styles.workoutCompleted,
+                  selectedPlan?.id === plan.id && { borderColor: currentMode.color }
+                ]}
+                onPress={() => selectWorkoutPlan(plan)}
+              >
+                <View style={styles.workoutIcon}>
+                  <MaterialIcons 
+                    name={
+                      plan.type === 'interval' ? 'repeat' :
+                      plan.type === 'endurance' ? 'timer' :
+                      plan.type === 'speed' ? 'speed' :
+                      'self-improvement'
+                    } 
+                    size={24} 
+                    color={plan.completed ? '#4CAF50' : currentMode.color} 
+                  />
+                </View>
+                <View style={styles.workoutContent}>
+                  <View style={styles.workoutHeader}>
+                    <Text style={styles.workoutName}>{plan.name}</Text>
+                    {plan.completed && (
+                      <MaterialIcons name="check-circle" size={18} color="#4CAF50" />
+                    )}
+                  </View>
+                  <Text style={styles.workoutDesc}>
+                    {plan.type === 'interval' ? 'Treino intervalado' :
+                     plan.type === 'endurance' ? 'Resistência' :
+                     plan.type === 'speed' ? 'Velocidade' : 'Recuperação'}
+                  </Text>
+                  <Text style={styles.workoutDetails}>
+                    {plan.duration} min • {plan.distance ? `${(plan.distance / 1000).toFixed(1)} km` : 'Intervalado'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </Animated.View>
+      )}
+
+      {/* Indicador de Treino Ativo (para modo Fitness) */}
+      {activeWorkout && walkMode === 'fitness' && isWalking && (
+        <View style={styles.activeWorkoutIndicator}>
+          <View style={styles.workoutProgressBar}>
+            <View 
+              style={[
+                styles.workoutProgressFill,
+                { width: `${workoutProgress}%`, backgroundColor: currentMode.color }
+              ]} 
+            />
+          </View>
+          
+          <View style={styles.workoutInfo}>
+            <Text style={styles.workoutActiveName}>{activeWorkout.name}</Text>
+            
+            {activeWorkout.type === 'interval' && activeWorkout.intervals && (
+              <View style={styles.intervalInfo}>
+                <Text style={styles.intervalType}>
+                  {activeWorkout.intervals[currentInterval].type === 'work' ? '🏃‍♂️ TRABALHO' : '🔄 DESCANSO'}
+                </Text>
+                <Text style={styles.intervalTime}>
+                  {Math.floor(intervalTimeLeft / 60)}:{(intervalTimeLeft % 60).toString().padStart(2, '0')}
+                </Text>
+                <Text style={styles.intervalProgress}>
+                  {currentInterval + 1}/{activeWorkout.intervals.length}
+                </Text>
+              </View>
+            )}
+          </View>
+          
+          <TouchableOpacity 
+            style={styles.cancelWorkoutButton}
+            onPress={() => {
+              Alert.alert(
+                'Cancelar Treino',
+                'Tem certeza que deseja cancelar o treino atual?',
+                [
+                  { text: 'Continuar' },
+                  { 
+                    text: 'Cancelar Treino', 
+                    style: 'destructive',
+                    onPress: () => {
+                      setActiveWorkout(null);
+                      cleanupWorkoutTimers();
+                    }
+                  },
+                ]
+              );
+            }}
+          >
+            <MaterialIcons name="close" size={20} color="#F44336" />
           </TouchableOpacity>
         </View>
-        
-        <View style={styles.modeOptionsContainer}>
-          {Object.entries(WALK_MODES).map(([key, mode]) => (
-            <TouchableOpacity 
-              key={key}
-              style={[
-                styles.modeOption,
-                walkMode === key && { borderColor: mode.color, backgroundColor: `${mode.color}10` }
-              ]}
-              onPress={() => changeWalkMode(key as WalkMode)}
-            >
-              <View style={[styles.modeIcon, { backgroundColor: mode.color }]}>
-                <MaterialIcons name={mode.icon} size={22} color="white" />
-              </View>
-              <View style={styles.modeContent}>
-                <Text style={styles.modeName}>{mode.name}</Text>
-                <Text style={styles.modeDesc}>{mode.description}</Text>
-              </View>
-              {walkMode === key && (
-                <MaterialIcons name="check-circle" size={22} color={mode.color} />
-              )}
-            </TouchableOpacity>
-          ))}
-        </View>
-      </Animated.View>
+      )}
     </SafeAreaView>
   );
 }
@@ -1112,6 +1733,8 @@ const styles = StyleSheet.create({
   },
   exploreControls: {
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   exploreButton: {
     flexDirection: 'row',
@@ -1130,6 +1753,16 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 13,
     fontWeight: '600',
+  },
+  fitnessGoalButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
   },
   infoButton: {
     width: 44,
@@ -1331,6 +1964,325 @@ const styles = StyleSheet.create({
     borderColor: 'white',
   },
   
+  // Estilos para modo Exploração
+  poiMarker: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: 'white',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  poiMarkerVisited: {
+    backgroundColor: '#4CAF50',
+  },
+  visitedBadge: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    backgroundColor: '#2196F3',
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'white',
+  },
+  areaMarker: {
+    backgroundColor: 'rgba(76, 175, 80, 0.2)',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#4CAF50',
+  },
+  areaMarkerText: {
+    color: '#4CAF50',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  poiModal: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    backgroundColor: 'white',
+    borderTopLeftRadius: 25,
+    borderTopRightRadius: 25,
+    paddingBottom: 30,
+    maxHeight: height * 0.5,
+  },
+  poiContent: {
+    padding: 20,
+  },
+  poiHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  poiCategory: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  poiInfo: {
+    flex: 1,
+  },
+  poiName: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 4,
+  },
+  poiDistance: {
+    fontSize: 14,
+    color: '#666',
+  },
+  poiRating: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF9C4',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  ratingText: {
+    marginLeft: 4,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FF8F00',
+  },
+  poiDescription: {
+    fontSize: 14,
+    color: '#555',
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  poiActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  poiActionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 10,
+    marginHorizontal: 5,
+    gap: 8,
+  },
+  discoverButton: {
+    backgroundColor: '#4CAF50',
+  },
+  poiActionText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+
+  // Estilos para modo Fitness
+  goalsModal: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'white',
+    borderTopLeftRadius: 25,
+    borderTopRightRadius: 25,
+    maxHeight: height * 0.6,
+    paddingBottom: 30,
+  },
+  goalsContainer: {
+    paddingHorizontal: 20,
+    paddingTop: 10,
+  },
+  goalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 15,
+    borderRadius: 15,
+    marginBottom: 10,
+    backgroundColor: '#f8f9fa',
+  },
+  goalIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    marginRight: 15,
+    borderWidth: 1,
+    borderColor: '#eee',
+  },
+  goalContent: {
+    flex: 1,
+  },
+  goalName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  goalProgress: {
+    height: 8,
+    backgroundColor: '#e9ecef',
+    borderRadius: 4,
+    marginBottom: 8,
+    overflow: 'hidden',
+  },
+  goalProgressBar: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  goalText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  workoutModal: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'white',
+    borderTopLeftRadius: 25,
+    borderTopRightRadius: 25,
+    maxHeight: height * 0.7,
+    paddingBottom: 30,
+  },
+  workoutContainer: {
+    paddingHorizontal: 15,
+    paddingTop: 10,
+  },
+  workoutItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 15,
+    borderRadius: 15,
+    marginBottom: 10,
+    backgroundColor: '#f8f9fa',
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  workoutCompleted: {
+    opacity: 0.7,
+  },
+  workoutIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    marginRight: 15,
+    borderWidth: 1,
+    borderColor: '#eee',
+  },
+  workoutContent: {
+    flex: 1,
+  },
+  workoutHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  workoutName: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  workoutDesc: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 4,
+  },
+  workoutDetails: {
+    fontSize: 12,
+    color: '#888',
+  },
+  activeWorkoutIndicator: {
+    position: 'absolute',
+    top: 80,
+    left: 15,
+    right: 15,
+    backgroundColor: 'white',
+    borderRadius: 15,
+    padding: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  workoutProgressBar: {
+    flex: 1,
+    height: 6,
+    backgroundColor: '#e9ecef',
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginRight: 15,
+  },
+  workoutProgressFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  workoutInfo: {
+    flex: 2,
+  },
+  workoutActiveName: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 4,
+  },
+  intervalInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  intervalType: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#666',
+    backgroundColor: '#f0f0f0',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  intervalTime: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#2196F3',
+  },
+  intervalProgress: {
+    fontSize: 10,
+    color: '#999',
+  },
+  cancelWorkoutButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FFEBEE',
+    marginLeft: 10,
+  },
+  
   // Tela de loading
   loadingContainer: {
     flex: 1,
@@ -1350,245 +2302,3 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
 });
-
-const darkMapStyle = [
-  { elementType: "geometry", stylers: [{ color: "#242f3e" }] },
-  { elementType: "labels.text.fill", stylers: [{ color: "#746855" }] },
-  { elementType: "labels.text.stroke", stylers: [{ color: "#242f3e" }] },
-  {
-    featureType: "administrative.locality",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#d59563" }],
-  },
-  {
-    featureType: "poi",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#d59563" }],
-  },
-  {
-    featureType: "poi.park",
-    elementType: "geometry",
-    stylers: [{ color: "#263c3f" }],
-  },
-  {
-    featureType: "poi.park",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#6b9a76" }],
-  },
-  {
-    featureType: "road",
-    elementType: "geometry",
-    stylers: [{ color: "#38414e" }],
-  },
-  {
-    featureType: "road",
-    elementType: "geometry.stroke",
-    stylers: [{ color: "#212a37" }],
-  },
-  {
-    featureType: "road",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#9ca5b3" }],
-  },
-  {
-    featureType: "road.highway",
-    elementType: "geometry",
-    stylers: [{ color: "#746855" }],
-  },
-  {
-    featureType: "road.highway",
-    elementType: "geometry.stroke",
-    stylers: [{ color: "#1f2835" }],
-  },
-  {
-    featureType: "road.highway",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#f3d19c" }],
-  },
-  {
-    featureType: "transit",
-    elementType: "geometry",
-    stylers: [{ color: "#2f3948" }],
-  },
-  {
-    featureType: "transit.station",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#d59563" }],
-  },
-  {
-    featureType: "water",
-    elementType: "geometry",
-    stylers: [{ color: "#17263c" }],
-  },
-  {
-    featureType: "water",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#515c6d" }],
-  },
-  {
-    featureType: "water",
-    elementType: "labels.text.stroke",
-    stylers: [{ color: "#17263c" }],
-  },
-];
-
-const lightMapStyle = [
-  {
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#f5f5f5"
-      }
-    ]
-  },
-  {
-    "elementType": "labels.icon",
-    "stylers": [
-      {
-        "visibility": "off"
-      }
-    ]
-  },
-  {
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#616161"
-      }
-    ]
-  },
-  {
-    "elementType": "labels.text.stroke",
-    "stylers": [
-      {
-        "color": "#f5f5f5"
-      }
-    ]
-  },
-  {
-    "featureType": "administrative.land_parcel",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#bdbdbd"
-      }
-    ]
-  },
-  {
-    "featureType": "poi",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#eeeeee"
-      }
-    ]
-  },
-  {
-    "featureType": "poi",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#757575"
-      }
-    ]
-  },
-  {
-    "featureType": "poi.park",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#e5e5e5"
-      }
-    ]
-  },
-  {
-    "featureType": "poi.park",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#9e9e9e"
-      }
-    ]
-  },
-  {
-    "featureType": "road",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#ffffff"
-      }
-    ]
-  },
-  {
-    "featureType": "road.arterial",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#757575"
-      }
-    ]
-  },
-  {
-    "featureType": "road.highway",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#dadada"
-      }
-    ]
-  },
-  {
-    "featureType": "road.highway",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#616161"
-      }
-    ]
-  },
-  {
-    "featureType": "road.local",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#9e9e9e"
-      }
-    ]
-  },
-  {
-    "featureType": "transit.line",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#e5e5e5"
-      }
-    ]
-  },
-  {
-    "featureType": "transit.station",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#eeeeee"
-      }
-    ]
-  },
-  {
-    "featureType": "water",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#c9c9c9"
-      }
-    ]
-  },
-  {
-    "featureType": "water",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#9e9e9e"
-      }
-    ]
-  }
-];
