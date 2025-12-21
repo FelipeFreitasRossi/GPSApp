@@ -88,6 +88,8 @@ export default function WalkApp() {
   const startTimeRef = useRef<number>(0);
   const distanceRef = useRef<number>(0);
   const caloriesRef = useRef<number>(0);
+  const lastCalorieUpdateRef = useRef<number>(0);
+  const elapsedTimeRef = useRef<number>(0);
   
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -538,6 +540,8 @@ export default function WalkApp() {
       setCalories(0);
       distanceRef.current = 0;
       caloriesRef.current = 0;
+      lastCalorieUpdateRef.current = Date.now();
+      elapsedTimeRef.current = 0;
       startTimeRef.current = Date.now();
       
       if (watchId.current) {
@@ -561,13 +565,31 @@ export default function WalkApp() {
         ])
       ).start();
 
-      // Timer
+      // CORREÇÃO DO TIMER: Timer corrigido para 1 segundo preciso
+      // Limpa qualquer timer existente primeiro
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+
+      // Cria novo timer com intervalo correto de 1000ms (1 segundo)
       timerRef.current = setInterval(() => {
-        setDuration(prev => prev + 1);
         if (isWalking && !isPaused) {
-          const newCalories = caloriesRef.current + (0.05 * 1.2);
-          setCalories(newCalories);
-          caloriesRef.current = newCalories;
+          // Incrementa a duração em 1 segundo
+          setDuration(prev => {
+            const newDuration = prev + 1;
+            elapsedTimeRef.current = newDuration;
+            
+            // Atualiza calorias baseado na velocidade atual
+            // Fórmula: calorias = MET * peso * tempo (horas)
+            // Assumindo peso médio de 70kg e MET de 3.5 para caminhada
+            const caloriesPerSecond = (3.5 * 70 * 3.5) / 3600; // Aprox. 0.238 cal/s
+            const newCalories = caloriesRef.current + caloriesPerSecond;
+            setCalories(newCalories);
+            caloriesRef.current = newCalories;
+            
+            return newDuration;
+          });
         }
       }, 1000);
 
@@ -627,7 +649,7 @@ export default function WalkApp() {
           distanceRef.current += segmentDistance;
           setDistance(distanceRef.current);
           
-          const elapsedTime = (Date.now() - startTimeRef.current) / 1000;
+          const elapsedTime = elapsedTimeRef.current || 1; // Evita divisão por zero
           const avgSpeed = elapsedTime > 0 ? (distanceRef.current / elapsedTime) * 3.6 : 0;
           setAvgSpeed(avgSpeed);
         }
@@ -653,16 +675,13 @@ export default function WalkApp() {
     const newPausedState = !isPaused;
     setIsPaused(newPausedState);
     
-    if (!newPausedState) {
-      // Se estava pausado e agora vai continuar
-      timerRef.current = setInterval(() => {
-        setDuration(prev => prev + 1);
-      }, 1000);
-    } else {
-      // Se vai pausar
+    // CORREÇÃO: Não recriar o timer aqui, apenas controlar o estado de pausa
+    // O timer já existe e verifica o estado isPaused
+    if (newPausedState) {
+      // Para de atualizar calorias
       if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
+        // Não limpa o timer, apenas para de atualizar calorias
+        // O timer continua rodando para manter a contagem de tempo
       }
     }
   };
@@ -674,6 +693,7 @@ export default function WalkApp() {
     setIsPaused(false);
     pulseAnim.stopAnimation();
     
+    // Limpa o timer corretamente
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
@@ -688,7 +708,7 @@ export default function WalkApp() {
       const walkData = {
         id: uuid(),
         distance: distanceRef.current,
-        duration,
+        duration: elapsedTimeRef.current,
         date: new Date().toISOString(),
         route: route.map(point => ({
           latitude: point.coords.latitude,
